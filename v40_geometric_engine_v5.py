@@ -16,7 +16,6 @@ except ImportError:
 def safe_1d(df, col_name):
     """
     Extracts a column from df as a guaranteed 1D float numpy array.
-    Handles DataFrame columns, Series, multi-index columns, and 2D arrays.
     """
     if col_name not in df.columns:
         matches = [c for c in df.columns if (isinstance(c, tuple) and c == col_name) or c == col_name]
@@ -32,12 +31,16 @@ def safe_1d(df, col_name):
     
     return np.asarray(sub, dtype=float).ravel()
 
-def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
+def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
     """
-    PARALLEL PATTERN EVALUATION (OPTION 2: SEPARATE ROWS PER PATTERN):
-    Scans a stock's daily price candles independently for ALL active geometric structures.
-    Returns a LIST of pattern result dictionaries (one dict per detected pattern).
-    If no pattern is found, returns a list containing one default 'No Pattern' dictionary.
+    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION:
+    Implements exact rules from Vivek Singhal's trading strategy lessons:
+    1. 180° Flat Horizontal Necklines (Peaks must be within 2.0% of each other).
+    2. Lifetime High Gate (Must be at least 8-10% below 52-week / Lifetime Highs).
+    3. Distinct Head Depth (Head must be at least 4% deeper than Left/Right shoulders).
+    4. 2-Step Confirmation (2nd green candle must close ABOVE the HIGH of the breakout candle).
+    5. Preceding Downtrend & Min Depth (Patterns require min 5% drop depth).
+    6. W-Pattern Target (Prior peak highest close or depth projection).
     """
     ticker = ticker.strip().upper()
     
@@ -58,19 +61,26 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
 
     try:
         yf_ticker = f"{ticker}.NS"
-        df = yf.Ticker(yf_ticker).history(period="6mo")
+        df = yf.Ticker(yf_ticker).history(period="1y")
 
-        if df.empty or len(df) < lookback_days:
+        if df.empty or len(df) < 60:
             return [default_no_pattern]
 
         close_arr = safe_1d(df, 'Close')
         open_arr = safe_1d(df, 'Open')
+        high_arr = safe_1d(df, 'High')
+        low_arr = safe_1d(df, 'Low')
+
         if len(close_arr) < 2 or len(open_arr) < 2:
             return [default_no_pattern]
 
         cmp_val = round(float(close_arr[-1]), 2)
         default_no_pattern['cmp'] = cmp_val
 
+        # Lifetime High Gate (52-week High)
+        lifetime_high = float(np.max(high_arr))
+        
+        # Recent Window
         df_recent = df.tail(lookback_days).copy()
         prices = safe_1d(df_recent, 'Close')
         opens = safe_1d(df_recent, 'Open')
@@ -78,53 +88,81 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
         highs = safe_1d(df_recent, 'High')
         dates = [d.strftime('%Y-%m-%d') for d in df_recent.index]
 
-        if len(prices) < 15 or len(lows) < 15 or len(highs) < 15:
+        if len(prices) < 20:
             return [default_no_pattern]
 
         is_green_today = prices[-1] > opens[-1]
-        is_green_prev = prices[-2] > opens[-2]
-        prev_close = float(prices[-2])
 
         std_val = float(np.std(prices))
-        prom = std_val * 0.25 if std_val > 0 else 1.0
+        prom = std_val * 0.30 if std_val > 0 else 1.0
         
-        peaks, _ = find_peaks(prices, distance=5, prominence=prom)
-        troughs, _ = find_peaks(-prices, distance=5, prominence=prom)
+        peaks, _ = find_peaks(prices, distance=6, prominence=prom)
+        troughs, _ = find_peaks(-prices, distance=6, prominence=prom)
 
         peaks = [int(p) for p in peaks]
         troughs = [int(t) for t in troughs]
 
         detected_patterns = []
 
-        # 1. INDEPENDENT CHECK: FRESH W-PATTERN (DOUBLE BOTTOM)
+        # -------------------------------------------------------------
+        # 1. SOURCE-GROUNDED W-PATTERN (DOUBLE BOTTOM)
+        # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
                 t1, t2 = troughs[i], troughs[i+1]
-                if (len(prices) - t2) > 22:
+                
+                if (len(prices) - t2) > 30 or (t2 - t1) < 5:
                     continue
 
                 p1_val, p2_val = float(lows[t1]), float(lows[t2])
                 min_bottom = min(p1_val, p2_val)
 
-                if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.05:
+                if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.035:
                     between_peaks = [p for p in peaks if t1 < p < t2]
                     if between_peaks:
                         nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
                         neckline = round(float(highs[nk_idx]), 2)
-                        height = neckline - min_bottom
-                        target = round(neckline + height, 2)
+                        
+                        # Lifetime High Gate (Neckline must be at least 8% below 52W High)
+                        if neckline >= (0.92 * lifetime_high):
+                            continue
+
+                        pattern_depth_pct = ((neckline - min_bottom) / neckline) * 100
+                        if pattern_depth_pct < 4.5:
+                            continue
+
+                        prior_prices = prices[:t1]
+                        if len(prior_prices) > 0:
+                            prior_highest_close = round(float(np.max(prior_prices)), 2)
+                            target = max(prior_highest_close, round(neckline + (neckline - min_bottom), 2))
+                        else:
+                            target = round(neckline + (neckline - min_bottom), 2)
+
                         dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+
+                        breakout_idx = None
+                        for idx_c in range(t2, len(prices)):
+                            if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
+                                breakout_idx = idx_c
+                                break
 
                         if cmp_val >= neckline:
                             if dist_pct > max_breakout_pct:
                                 continue
-                            status = 'CONFIRMED BREAKOUT (2 Green)' if (is_green_today and is_green_prev) else ('INITIAL BREAKOUT (1st Green)' if is_green_today else 'PULLBACK AT NECKLINE')
-                            signal = 'BUY MORNING (2nd Green)' if (is_green_today and is_green_prev) else ('WATCHLIST (Wait 2nd Green)' if is_green_today else 'WATCHLIST (Pullback)')
+                            
+                            if breakout_idx is not None and breakout_idx < len(prices) - 1:
+                                breakout_high = highs[breakout_idx]
+                                if prices[-1] > breakout_high and is_green_today:
+                                    status = 'CONFIRMED BREAKOUT (Closed Above Breakout High)'
+                                    signal = 'BUY MORNING (2-Step Confirmed)'
+                                else:
+                                    status = 'INITIAL BREAKOUT (Wait for High Confirmation)'
+                                    signal = f'WATCHLIST (Wait close above ₹{round(breakout_high, 1)})'
+                            else:
+                                status = 'INITIAL BREAKOUT (1st Green Candle)'
+                                signal = 'WATCHLIST (Wait 2nd Green Candle)'
                         else:
-                            if prev_close >= neckline:
-                                status = 'FAILED BREAKOUT (Slipped Below)'
-                                signal = 'AVOID (Breakout Failed)'
-                            elif dist_pct >= -6.0:
+                            if dist_pct >= -5.0:
                                 status = 'APPROACHING BREAKOUT'
                                 signal = f'WATCHLIST (Alert at ₹{neckline})'
                             else:
@@ -144,58 +182,91 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
                         })
                         break
 
-        # 2. INDEPENDENT CHECK: FRESH REVERSE HEAD & SHOULDERS
+        # -------------------------------------------------------------
+        # 2. SOURCE-GROUNDED REVERSE HEAD & SHOULDERS
+        # -------------------------------------------------------------
         if len(troughs) >= 3:
             for i in range(len(troughs) - 3, -1, -1):
                 s1_idx, h_idx, s2_idx = troughs[i], troughs[i+1], troughs[i+2]
-                if (len(prices) - s2_idx) > 22:
+                if (len(prices) - s2_idx) > 30:
                     continue
 
                 s1_p, h_p, s2_p = float(lows[s1_idx]), float(lows[h_idx]), float(lows[s2_idx])
 
-                if h_p < s1_p and h_p < s2_p and abs(s1_p - s2_p) / min(s1_p, s2_p) <= 0.06:
-                    p1_between = [p for p in peaks if s1_idx < p < h_idx]
-                    p2_between = [p for p in peaks if h_idx < p < s2_idx]
+                if h_p < (s1_p * 0.96) and h_p < (s2_p * 0.96):
+                    min_shoulder = min(s1_p, s2_p)
+                    if min_shoulder > 0 and (abs(s1_p - s2_p) / min_shoulder) <= 0.05:
+                        p1_between = [p for p in peaks if s1_idx < p < h_idx]
+                        p2_between = [p for p in peaks if h_idx < p < s2_idx]
 
-                    if p1_between and p2_between:
-                        nk1_idx = max(p1_between, key=lambda p: float(highs[p]))
-                        nk2_idx = max(p2_between, key=lambda p: float(highs[p]))
-                        neckline = round(float((highs[nk1_idx] + highs[nk2_idx]) / 2.0), 2)
-                        height = neckline - h_p
-                        target = round(neckline + height, 2)
-                        dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+                        if p1_between and p2_between:
+                            nk1_idx = max(p1_between, key=lambda p: float(highs[p]))
+                            nk2_idx = max(p2_between, key=lambda p: float(highs[p]))
+                            nk1 = float(highs[nk1_idx])
+                            nk2 = float(highs[nk2_idx])
 
-                        if cmp_val >= neckline:
-                            if dist_pct > max_breakout_pct:
+                            # 180° Flat Horizontal Neckline Rule
+                            if abs(nk1 - nk2) / min(nk1, nk2) > 0.020:
                                 continue
-                            status = 'CONFIRMED BREAKOUT (2 Green)' if (is_green_today and is_green_prev) else 'PULLBACK AT NECKLINE'
-                            signal = 'BUY MORNING (2nd Green)' if (is_green_today and is_green_prev) else 'WATCHLIST (Pullback)'
-                        else:
-                            if prev_close >= neckline:
-                                status = 'FAILED BREAKOUT (Slipped Below)'
-                                signal = 'AVOID (Breakout Failed)'
+
+                            neckline = round(float((nk1 + nk2) / 2.0), 2)
+                            
+                            if neckline >= (0.92 * lifetime_high):
+                                continue
+
+                            height = neckline - h_p
+                            target = round(neckline + height, 2)
+                            dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+
+                            breakout_idx = None
+                            for idx_c in range(s2_idx, len(prices)):
+                                if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
+                                    breakout_idx = idx_c
+                                    break
+
+                            if cmp_val >= neckline:
+                                if dist_pct > max_breakout_pct:
+                                    continue
+                                
+                                if breakout_idx is not None and breakout_idx < len(prices) - 1:
+                                    breakout_high = highs[breakout_idx]
+                                    if prices[-1] > breakout_high and is_green_today:
+                                        status = 'CONFIRMED BREAKOUT (Closed Above Breakout High)'
+                                        signal = 'BUY MORNING (2-Step Confirmed)'
+                                    else:
+                                        status = 'INITIAL BREAKOUT (Wait for High Confirmation)'
+                                        signal = f'WATCHLIST (Wait close above ₹{round(breakout_high, 1)})'
+                                else:
+                                    status = 'INITIAL BREAKOUT (1st Green Candle)'
+                                    signal = 'WATCHLIST (Wait 2nd Green Candle)'
                             else:
-                                status = 'APPROACHING BREAKOUT'
-                                signal = f'WATCHLIST (Alert at ₹{neckline})'
+                                if dist_pct >= -5.0:
+                                    status = 'APPROACHING BREAKOUT'
+                                    signal = f'WATCHLIST (Alert at ₹{neckline})'
+                                else:
+                                    status = 'FORMING RIGHT SHOULDER'
+                                    signal = 'WATCHLIST ONLY'
 
-                        detected_patterns.append({
-                            'ticker': ticker,
-                            'pattern_type': 'Fresh Reverse H&S',
-                            'cmp': cmp_val,
-                            'neckline_price': neckline,
-                            'dist_to_breakout_pct': dist_pct,
-                            'breakout_status': status,
-                            'projected_target': target,
-                            'anchor_dates': f"{dates[s1_idx]} (LS) / {dates[h_idx]} (H) / {dates[s2_idx]} (RS)",
-                            'action_signal': signal
-                        })
-                        break
+                            detected_patterns.append({
+                                'ticker': ticker,
+                                'pattern_type': 'Fresh Reverse H&S',
+                                'cmp': cmp_val,
+                                'neckline_price': neckline,
+                                'dist_to_breakout_pct': dist_pct,
+                                'breakout_status': status,
+                                'projected_target': target,
+                                'anchor_dates': f"{dates[s1_idx]} (LS) / {dates[h_idx]} (H) / {dates[s2_idx]} (RS)",
+                                'action_signal': signal
+                            })
+                            break
 
-        # 3. INDEPENDENT CHECK: FRESH CUP WITH HANDLE
+        # -------------------------------------------------------------
+        # 3. SOURCE-GROUNDED CUP WITH HANDLE
+        # -------------------------------------------------------------
         if len(troughs) >= 2 and len(peaks) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
                 t_cup = troughs[i]
-                if len(prices) - t_cup > 35:
+                if len(prices) - t_cup > 50:
                     continue
                 rim_peaks = [p for p in peaks if p < t_cup]
                 handle_peaks = [p for p in peaks if p > t_cup]
@@ -204,41 +275,65 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
                     p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
                     rim_val = float(highs[p_rim])
                     handle_val = float(highs[p_handle])
-                    if abs(rim_val - handle_val) / rim_val <= 0.06:
-                        neckline = round(float((rim_val + handle_val) / 2.0), 2)
-                        cup_depth = neckline - float(lows[t_cup])
-                        target = round(neckline + cup_depth, 2)
-                        dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
 
-                        if cmp_val >= neckline:
-                            if dist_pct <= max_breakout_pct:
-                                status = 'CONFIRMED BREAKOUT' if (is_green_today and is_green_prev) else 'INITIAL BREAKOUT'
-                                signal = 'BUY MORNING (2nd Green)' if (is_green_today and is_green_prev) else 'WATCHLIST'
+                    if abs(rim_val - handle_val) / min(rim_val, handle_val) <= 0.020:
+                        neckline = round(float((rim_val + handle_val) / 2.0), 2)
+                        
+                        if neckline >= (0.92 * lifetime_high):
+                            continue
+
+                        cup_depth = neckline - float(lows[t_cup])
+                        cup_depth_pct = (cup_depth / neckline) * 100
+
+                        if 6.0 <= cup_depth_pct <= 30.0:
+                            target = round(neckline + cup_depth, 2)
+                            dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+
+                            breakout_idx = None
+                            for idx_c in range(t_cup, len(prices)):
+                                if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
+                                    breakout_idx = idx_c
+                                    break
+
+                            if cmp_val >= neckline:
+                                if dist_pct <= max_breakout_pct:
+                                    if breakout_idx is not None and breakout_idx < len(prices) - 1:
+                                        breakout_high = highs[breakout_idx]
+                                        if prices[-1] > breakout_high and is_green_today:
+                                            status = 'CONFIRMED BREAKOUT (Closed Above Breakout High)'
+                                            signal = 'BUY MORNING (2-Step Confirmed)'
+                                        else:
+                                            status = 'INITIAL BREAKOUT (Wait for High Confirmation)'
+                                            signal = f'WATCHLIST (Wait close above ₹{round(breakout_high, 1)})'
+                                    else:
+                                        status = 'INITIAL BREAKOUT'
+                                        signal = 'WATCHLIST'
+
+                                    detected_patterns.append({
+                                        'ticker': ticker,
+                                        'pattern_type': 'Fresh Cup with Handle',
+                                        'cmp': cmp_val,
+                                        'neckline_price': neckline,
+                                        'dist_to_breakout_pct': dist_pct,
+                                        'breakout_status': status,
+                                        'projected_target': target,
+                                        'anchor_dates': f"{dates[p_rim]} (Rim1) / {dates[t_cup]} (Cup) / {dates[p_handle]} (Handle)",
+                                        'action_signal': signal
+                                    })
+                                    break
+                            elif dist_pct >= -6.0:
                                 detected_patterns.append({
                                     'ticker': ticker,
                                     'pattern_type': 'Fresh Cup with Handle',
                                     'cmp': cmp_val,
                                     'neckline_price': neckline,
                                     'dist_to_breakout_pct': dist_pct,
-                                    'breakout_status': status,
+                                    'breakout_status': 'FORMING HANDLE / NEAR RIM',
                                     'projected_target': target,
                                     'anchor_dates': f"{dates[p_rim]} (Rim1) / {dates[t_cup]} (Cup) / {dates[p_handle]} (Handle)",
-                                    'action_signal': signal
+                                    'action_signal': f'WATCHLIST (Alert at ₹{neckline})'
                                 })
                                 break
-                        elif dist_pct >= -6.0:
-                            detected_patterns.append({
-                                'ticker': ticker,
-                                'pattern_type': 'Fresh Cup with Handle',
-                                'cmp': cmp_val,
-                                'neckline_price': neckline,
-                                'dist_to_breakout_pct': dist_pct,
-                                'breakout_status': 'FORMING HANDLE / NEAR RIM',
-                                'projected_target': target,
-                                'anchor_dates': f"{dates[p_rim]} (Rim1) / {dates[t_cup]} (Cup) / {dates[p_handle]} (Handle)",
-                                'action_signal': f'WATCHLIST (Alert at ₹{neckline})'
-                            })
-                            break
 
         if detected_patterns:
             return detected_patterns
@@ -250,10 +345,6 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
         return [default_no_pattern]
 
 def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analysis-v5.xlsx"):
-    """
-    Generates a formatted Excel workbook containing short-term parallel pattern scan results 
-    with separate rows per pattern and company group color fills.
-    """
     wb = openpyxl.Workbook()
     
     font_title = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
@@ -264,13 +355,12 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
     fill_blue_head = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
     fill_section = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     
-    # Soft Pastel Fills per Ticker Group (distinct colors for consecutive tickers)
     group_fills = [
-        PatternFill(start_color="EBF1F5", end_color="EBF1F5", fill_type="solid"), # Light Slate Blue
-        PatternFill(start_color="F9F2EC", end_color="F9F2EC", fill_type="solid"), # Soft Cream
-        PatternFill(start_color="EBF5EC", end_color="EBF5EC", fill_type="solid"), # Soft Mint
-        PatternFill(start_color="F5EBF5", end_color="F5EBF5", fill_type="solid"), # Soft Lavender
-        PatternFill(start_color="F5F5EB", end_color="F5F5EB", fill_type="solid")  # Soft Gold
+        PatternFill(start_color="EBF1F5", end_color="EBF1F5", fill_type="solid"),
+        PatternFill(start_color="F9F2EC", end_color="F9F2EC", fill_type="solid"),
+        PatternFill(start_color="EBF5EC", end_color="EBF5EC", fill_type="solid"),
+        PatternFill(start_color="F5EBF5", end_color="F5EBF5", fill_type="solid"),
+        PatternFill(start_color="F5F5EB", end_color="F5F5EB", fill_type="solid")
     ]
 
     fill_green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -300,14 +390,14 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
         pass
 
     ws.merge_cells("A1:I1")
-    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (GROUP-COLOR CODED ROWS)")
+    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (SOURCE-GROUNDED RULES)")
     t_cell.font = font_title
     t_cell.fill = fill_navy
     t_cell.alignment = align_center
     ws.row_dimensions.height = 35
 
     ws.merge_cells("A2:I2")
-    sub_cell = ws.cell(row=2, column=1, value="Option 2: Individual Rows per Detected Pattern | Ticker Groups Color-Coded Together")
+    sub_cell = ws.cell(row=2, column=1, value="Strict 180° Flat Necklines | Lifetime High Gate | 2-Step Breakout High Confirmation")
     sub_cell.font = Font(name="Calibri", size=10, italic=True, color="FFFFFF")
     sub_cell.fill = fill_blue_head
     sub_cell.alignment = align_center
@@ -355,16 +445,14 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
             c8.alignment = align_center
             c9.alignment = align_left
 
-            # Apply Company Group Color
             for col_i in range(1, 10):
                 cell = ws.cell(row=current_row, column=col_i)
                 cell.font = font_regular
                 cell.border = border_data
                 cell.fill = company_fill
 
-            # Highlight Breakout Status
             status_str = str(res['breakout_status']).upper()
-            if 'CONFIRMED BREAKOUT' in status_str or 'FRESH BREAKOUT' in status_str:
+            if 'CONFIRMED BREAKOUT' in status_str or 'CLOSED ABOVE BREAKOUT HIGH' in status_str:
                 c6.fill = fill_green
                 c6.font = font_green
             elif 'FAILED BREAKOUT' in status_str or 'SLIPPED' in status_str:
@@ -374,9 +462,8 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
                 c6.fill = fill_yellow
                 c6.font = font_yellow
 
-            # Highlight Action Signal
             signal_str = str(res['action_signal']).upper()
-            if 'BUY MORNING' in signal_str or 'BUY' in signal_str:
+            if 'BUY MORNING' in signal_str or 'CONFIRMED' in signal_str:
                 c9.fill = fill_green
                 c9.font = font_green
             elif 'AVOID' in signal_str or 'FAILED' in signal_str:
@@ -388,9 +475,8 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [18, 26, 14, 18, 20, 32, 18, 38, 32]
+    col_widths = [10-14]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(output_filename)
-
