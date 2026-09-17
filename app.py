@@ -99,7 +99,9 @@ if st.sidebar.button("🚀 Run Analysis", type="primary"):
             v40_auto_fetcher.create_v40_analysis_workbook(tickers, out_file)
             
             df = pd.read_excel(out_file, skiprows=3)
-            df['Backtest Sticky Notes'] = df['Ticker'].apply(lambda x: notes.get(str(x).upper(), ''))
+            # Safely resolve Ticker column name
+            ticker_col = 'Ticker' if 'Ticker' in df.columns else ('Ticker / Company' if 'Ticker / Company' in df.columns else df.columns)
+            df['Backtest Sticky Notes'] = df[ticker_col].apply(lambda x: notes.get(str(x).upper(), ''))
             
             st.dataframe(df, use_container_width=True)
             df.to_excel(out_file, index=False)
@@ -118,7 +120,9 @@ if st.sidebar.button("🚀 Run Analysis", type="primary"):
             v40_geometric_engine_v5.create_geometric_workbook(tickers, out_file)
             
             df = pd.read_excel(out_file, skiprows=3)
-            df['Backtest Sticky Notes'] = df['Ticker'].apply(lambda x: notes.get(str(x).upper(), ''))
+            # Safely resolve Ticker column name
+            ticker_col = 'Ticker' if 'Ticker' in df.columns else ('Ticker / Company' if 'Ticker / Company' in df.columns else df.columns)
+            df['Backtest Sticky Notes'] = df[ticker_col].apply(lambda x: notes.get(str(x).upper(), ''))
             
             st.dataframe(df, use_container_width=True)
             df.to_excel(out_file, index=False)
@@ -150,12 +154,3 @@ if tickers:
     if current_note:
         st.info(f"**Saved Note for {selected_ticker}:**\n\n{current_note}")
 
-
-  
-
-       
-
-            
-      
-            
-     
