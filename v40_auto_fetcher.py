@@ -201,7 +201,7 @@ def create_v40_analysis_workbook(ticker_list, output_filename="v40_automated_ana
             if idx % 2 == 1:
                 cell.fill = row_fill
 
-    col_widths =
+    col_widths = [25, 18, 16, 14, 16, 28, 24, 22, 35]
     for i, w in enumerate(col_widths, start=1):
         ws_dash.column_dimensions[get_column_letter(i)].width = w
 
