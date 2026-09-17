@@ -14,9 +14,6 @@ except ImportError:
     HAS_LIBS = False
 
 def safe_1d(df, col_name):
-    """
-    Extracts a column from df as a guaranteed 1D float numpy array.
-    """
     if col_name not in df.columns:
         matches = [c for c in df.columns if (isinstance(c, tuple) and c == col_name) or c == col_name]
         if matches:
@@ -32,16 +29,6 @@ def safe_1d(df, col_name):
     return np.asarray(sub, dtype=float).ravel()
 
 def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
-    """
-    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION:
-    Implements exact rules from Vivek Singhal's trading strategy lessons:
-    1. 180° Flat Horizontal Necklines (Peaks must be within 2.0% of each other).
-    2. Lifetime High Gate (Must be at least 8-10% below 52-week / Lifetime Highs).
-    3. Distinct Head Depth (Head must be at least 4% deeper than Left/Right shoulders).
-    4. 2-Step Confirmation (2nd green candle must close ABOVE the HIGH of the breakout candle).
-    5. Preceding Downtrend & Min Depth (Patterns require min 5% drop depth).
-    6. W-Pattern Target (Prior peak highest close or depth projection).
-    """
     ticker = ticker.strip().upper()
     
     default_no_pattern = {
@@ -77,10 +64,8 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         cmp_val = round(float(close_arr[-1]), 2)
         default_no_pattern['cmp'] = cmp_val
 
-        # Lifetime High Gate (52-week High)
         lifetime_high = float(np.max(high_arr))
         
-        # Recent Window
         df_recent = df.tail(lookback_days).copy()
         prices = safe_1d(df_recent, 'Close')
         opens = safe_1d(df_recent, 'Open')
@@ -105,12 +90,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. SOURCE-GROUNDED W-PATTERN (DOUBLE BOTTOM)
+        # 1. W-PATTERN WITH FULL START-TO-END DATE SPANS
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
                 t1, t2 = troughs[i], troughs[i+1]
-                
                 if (len(prices) - t2) > 30 or (t2 - t1) < 5:
                     continue
 
@@ -123,7 +107,6 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
                         neckline = round(float(highs[nk_idx]), 2)
                         
-                        # Lifetime High Gate (Neckline must be at least 8% below 52W High)
                         if neckline >= (0.92 * lifetime_high):
                             continue
 
@@ -145,6 +128,12 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
                                 breakout_idx = idx_c
                                 break
+
+                        # Date Spans
+                        pattern_start_date = dates[max(0, t1 - 10)]
+                        nk_date = dates[nk_idx]
+                        end_date = dates[-1]
+                        date_span_str = f"L1: {pattern_start_date} ➔ {nk_date} | L2: {nk_date} ➔ {end_date}"
 
                         if cmp_val >= neckline:
                             if dist_pct > max_breakout_pct:
@@ -177,13 +166,13 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             'dist_to_breakout_pct': dist_pct,
                             'breakout_status': status,
                             'projected_target': target,
-                            'anchor_dates': f"{dates[t1]} (L1) / {dates[nk_idx]} (Nk) / {dates[t2]} (L2)",
+                            'anchor_dates': date_span_str,
                             'action_signal': signal
                         })
                         break
 
         # -------------------------------------------------------------
-        # 2. SOURCE-GROUNDED REVERSE HEAD & SHOULDERS
+        # 2. REVERSE HEAD & SHOULDERS WITH FULL DATE SPANS
         # -------------------------------------------------------------
         if len(troughs) >= 3:
             for i in range(len(troughs) - 3, -1, -1):
@@ -205,7 +194,6 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             nk1 = float(highs[nk1_idx])
                             nk2 = float(highs[nk2_idx])
 
-                            # 180° Flat Horizontal Neckline Rule
                             if abs(nk1 - nk2) / min(nk1, nk2) > 0.020:
                                 continue
 
@@ -223,6 +211,13 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
                                     breakout_idx = idx_c
                                     break
+
+                            # Date Spans
+                            ls_start = dates[max(0, s1_idx - 7)]
+                            ls_end = dates[nk1_idx]
+                            head_end = dates[nk2_idx]
+                            rs_end = dates[-1]
+                            date_span_str = f"LS: {ls_start}➔{ls_end} | Head: {ls_end}➔{head_end} | RS: {head_end}➔{rs_end}"
 
                             if cmp_val >= neckline:
                                 if dist_pct > max_breakout_pct:
@@ -255,13 +250,13 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 'dist_to_breakout_pct': dist_pct,
                                 'breakout_status': status,
                                 'projected_target': target,
-                                'anchor_dates': f"{dates[s1_idx]} (LS) / {dates[h_idx]} (H) / {dates[s2_idx]} (RS)",
+                                'anchor_dates': date_span_str,
                                 'action_signal': signal
                             })
                             break
 
         # -------------------------------------------------------------
-        # 3. SOURCE-GROUNDED CUP WITH HANDLE
+        # 3. CUP WITH HANDLE WITH FULL START-TO-END DATE SPANS
         # -------------------------------------------------------------
         if len(troughs) >= 2 and len(peaks) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -295,6 +290,12 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     breakout_idx = idx_c
                                     break
 
+                            # Date Spans
+                            cup_start = dates[p_rim]
+                            cup_end = dates[p_handle]
+                            handle_end = dates[-1]
+                            date_span_str = f"Cup: {cup_start} ➔ {cup_end} | Handle: {cup_end} ➔ {handle_end}"
+
                             if cmp_val >= neckline:
                                 if dist_pct <= max_breakout_pct:
                                     if breakout_idx is not None and breakout_idx < len(prices) - 1:
@@ -317,7 +318,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                         'dist_to_breakout_pct': dist_pct,
                                         'breakout_status': status,
                                         'projected_target': target,
-                                        'anchor_dates': f"{dates[p_rim]} (Rim1) / {dates[t_cup]} (Cup) / {dates[p_handle]} (Handle)",
+                                        'anchor_dates': date_span_str,
                                         'action_signal': signal
                                     })
                                     break
@@ -330,7 +331,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     'dist_to_breakout_pct': dist_pct,
                                     'breakout_status': 'FORMING HANDLE / NEAR RIM',
                                     'projected_target': target,
-                                    'anchor_dates': f"{dates[p_rim]} (Rim1) / {dates[t_cup]} (Cup) / {dates[p_handle]} (Handle)",
+                                    'anchor_dates': date_span_str,
                                     'action_signal': f'WATCHLIST (Alert at ₹{neckline})'
                                 })
                                 break
@@ -390,23 +391,23 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
         pass
 
     ws.merge_cells("A1:I1")
-    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (SOURCE-GROUNDED RULES)")
+    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (EXACT DATE SPANS)")
     t_cell.font = font_title
     t_cell.fill = fill_navy
     t_cell.alignment = align_center
     ws.row_dimensions.height = 35
 
     ws.merge_cells("A2:I2")
-    sub_cell = ws.cell(row=2, column=1, value="Strict 180° Flat Necklines | Lifetime High Gate | 2-Step Breakout High Confirmation")
+    sub_cell = ws.cell(row=2, column=1, value="Shows Full Start ➔ End Date Spans for Cups, Handles, Leg 1/2 & Shoulders")
     sub_cell.font = Font(name="Calibri", size=10, italic=True, color="FFFFFF")
     sub_cell.fill = fill_blue_head
     sub_cell.alignment = align_center
     ws.row_dimensions.height = 20
 
     headers = [
-        "Ticker / Company", "Pattern Type", "CMP (₹)", "Neckline / Rim (₹)", 
+        "Ticker / Company", "Pattern Type", "CMP (₹)", "Neckline / Resistance (₹)", 
         "Distance to Breakout", "Breakout Status", "Projected Target (₹)", 
-        "Key Anchor Dates", "Action Signal"
+        "Pattern Date Spans (Start ➔ End)", "Action Signal"
     ]
 
     ws.row_dimensions.height = 28
@@ -442,7 +443,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
             c5.number_format = '0.0%'
             c6.alignment = align_center
             c7.number_format = '₹#,##0.0'
-            c8.alignment = align_center
+            c8.alignment = align_left
             c9.alignment = align_left
 
             for col_i in range(1, 10):
@@ -475,8 +476,9 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [10-14]
+    col_widths = [18, 26, 14, 22, 20, 34, 18, 48, 32]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(output_filename)
+
