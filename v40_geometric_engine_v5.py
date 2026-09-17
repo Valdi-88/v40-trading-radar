@@ -63,7 +63,6 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
         if df.empty or len(df) < lookback_days:
             return result
 
-        # Extract 1D price arrays safely
         close_arr = safe_1d(df, 'Close')
         open_arr = safe_1d(df, 'Open')
         if len(close_arr) < 2 or len(open_arr) < 2:
@@ -72,7 +71,6 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
         cmp_val = round(float(close_arr[-1]), 2)
         result['cmp'] = cmp_val
 
-        # Tight recent lookback window
         df_recent = df.tail(lookback_days).copy()
         prices = safe_1d(df_recent, 'Close')
         opens = safe_1d(df_recent, 'Open')
@@ -83,12 +81,10 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
         if len(prices) < 15 or len(lows) < 15 or len(highs) < 15:
             return result
 
-        # Candle color checks
         is_green_today = prices[-1] > opens[-1]
         is_green_prev = prices[-2] > opens[-2]
         prev_close = float(prices[-2])
 
-        # Local peaks and troughs
         std_val = float(np.std(prices))
         prom = std_val * 0.25 if std_val > 0 else 1.0
         
@@ -114,7 +110,7 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
 
                 if min_bottom > 0:
                     diff_pct = abs(p1_val - p2_val) / min_bottom
-                    if diff_pct <= 0.04:
+                    if diff_pct <= 0.05:
                         between_peaks = [p for p in peaks if t1 < p < t2]
                         if between_peaks:
                             nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
@@ -132,7 +128,7 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
                                 if prev_close >= neckline:
                                     status = 'FAILED BREAKOUT (Slipped Below)'
                                     signal = 'AVOID (Breakout Failed)'
-                                elif dist_pct >= -4.0:
+                                elif dist_pct >= -6.0:
                                     status = 'APPROACHING BREAKOUT'
                                     signal = f'WATCHLIST (Alert at ₹{neckline})'
                                 else:
@@ -163,7 +159,7 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
 
                 if h_p < s1_p and h_p < s2_p:
                     min_shoulder = min(s1_p, s2_p)
-                    if min_shoulder > 0 and abs(s1_p - s2_p) / min_shoulder <= 0.05:
+                    if min_shoulder > 0 and abs(s1_p - s2_p) / min_shoulder <= 0.06:
                         p1_between = [p for p in peaks if s1_idx < p < h_idx]
                         p2_between = [p for p in peaks if h_idx < p < s2_idx]
 
@@ -216,7 +212,7 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
                     p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
                     rim_val = float(highs[p_rim])
                     handle_val = float(highs[p_handle])
-                    if abs(rim_val - handle_val) / rim_val <= 0.05:
+                    if abs(rim_val - handle_val) / rim_val <= 0.06:
                         neckline = round(float((rim_val + handle_val) / 2.0), 2)
                         cup_depth = neckline - float(lows[t_cup])
                         target = round(neckline + cup_depth, 2)
@@ -236,7 +232,7 @@ def analyze_geometric_patterns(ticker, lookback_days=45, max_breakout_pct=3.0):
                                     'action_signal': signal
                                 })
                                 break
-                        elif dist_pct >= -5.0:
+                        elif dist_pct >= -6.0:
                             detected_patterns.append({
                                 'pattern_type': 'Fresh Cup with Handle',
                                 'neckline_price': neckline,
@@ -413,3 +409,4 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
         ws.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(output_filename)
+
