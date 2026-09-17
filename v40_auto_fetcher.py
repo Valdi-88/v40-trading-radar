@@ -130,7 +130,11 @@ def create_v40_analysis_workbook(ticker_list, output_filename="v40_automated_ana
 
     ws_dash = wb.active
     ws_dash.title = "V40 Fundamental Moat Dashboard"
-    ws_dash.views.sheetView.showGridLines = True
+    
+    try:
+        ws_dash.views.sheetView.showGridLines = True
+    except Exception:
+        pass
     
     # Title Banner
     ws_dash.merge_cells("A1:I1")
