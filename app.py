@@ -28,19 +28,58 @@ def save_notes(notes):
 
 notes = load_notes()
 
+# Master Watchlist Definitions
+V40_CORE = [
+    "ASIANPAINT", "TITAN", "PIDILITIND", "HDFCBANK", "ICICIBANK", "TCS", "INFY", 
+    "HINDUNILVR", "NESTLEIND", "BAJFINANCE", "BAJAJFINSV", "HCLTECH", "RELIANCE", 
+    "KOTAKBANK", "DABUR", "BRITANNIA", "HAVELLS", "BERGEPAINT", "BAJAJ-AUTO", 
+    "MARUTI", "EICHERMOT", "POLYCAB", "SUPREMEIND", "ASTRAL", "TRENT", "PAGEIND", 
+    "COALINDIA", "BATAINDIA", "TATAPOWER", "APLLTD"
+]
+
+V40_NEXT = [
+    "RELAXO", "INDIGOPNTS", "BECTORFOOD", "5PAISA", "ALEMBICLTD", "AKZOINDIA", 
+    "ABBOTTINDIA", "FLUOROCHEM", "CERA", "ERIS", "FINEORG", "DEEPAKNTR", 
+    "VINATIORGA", "KEI", "VIPIND", "SONACOMS", "METROPOLIS", "LALPATHLAB", 
+    "CLEAN", "LAURUSLABS", "RAJRATAN", "MAPMYINDIA", "CRAFTSMAN", "CAMPUS", "HAPPSTMNDS"
+]
+
 st.title("📈 V40 Trading Strategy Radar & Backtest Journal")
-st.write("Run Screener Moat Fundamentals or Short-Term Geometric Pattern Scans with Persistent Sticky Notes.")
+st.write("Run Screener Moat Fundamentals or Short-Term Geometric Pattern Scans with Watchlists & Sticky Notes.")
 
 # Sidebar controls
-st.sidebar.header("⚙️ Watchlist & Controls")
+st.sidebar.header("⚙️ Watchlist & Selection")
 
-ticker_input = st.sidebar.text_area(
-    "Enter Stock Tickers (comma separated):",
-    value="CEATLTD, COALINDIA, TATAPOWER, APLLTD",
-    height=120
+watchlist_choice = st.sidebar.selectbox(
+    "Choose Watchlist Source:",
+    ["🛡️ V40 Core Moats", "🚀 V40 Next Watchlist", "🎯 Custom Tickers"]
 )
 
-tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
+# Ticker Selection Logic
+if watchlist_choice == "🛡️ V40 Core Moats":
+    base_tickers = V40_CORE
+elif watchlist_choice == "🚀 V40 Next Watchlist":
+    base_tickers = V40_NEXT
+else:
+    base_tickers = []
+
+if watchlist_choice != "🎯 Custom Tickers":
+    st.sidebar.markdown("**Filter Tickers:**")
+    selected_subset = st.sidebar.multiselect(
+        "Select specific company/companies (leave blank to analyze ALL in list):",
+        options=base_tickers,
+        default=[]
+    )
+    tickers = selected_subset if selected_subset else base_tickers
+else:
+    ticker_input = st.sidebar.text_area(
+        "Enter Custom Tickers (comma separated):",
+        value="CEATLTD, COALINDIA, TATAPOWER, APLLTD",
+        height=120
+    )
+    tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
+
+st.sidebar.markdown(f"**Selected Companies Count:** `{len(tickers)}`")
 
 strategy = st.sidebar.radio(
     "Select Strategy Engine:",
@@ -50,7 +89,7 @@ strategy = st.sidebar.radio(
 # Main Scan Button
 if st.sidebar.button("🚀 Run Analysis", type="primary"):
     if not tickers:
-        st.warning("Please enter at least one valid ticker symbol.")
+        st.warning("Please select or enter at least one valid ticker symbol.")
     else:
         st.subheader(f"Scanning {len(tickers)} Tickers: {', '.join(tickers)}")
         
@@ -59,13 +98,10 @@ if st.sidebar.button("🚀 Run Analysis", type="primary"):
             out_file = "v40_automated_analysis.xlsx"
             v40_auto_fetcher.create_v40_analysis_workbook(tickers, out_file)
             
-            # Read generated Excel & attach sticky notes
             df = pd.read_excel(out_file, skiprows=3)
             df['Backtest Sticky Notes'] = df['Ticker'].apply(lambda x: notes.get(str(x).upper(), ''))
             
             st.dataframe(df, use_container_width=True)
-            
-            # Save updated dataframe with notes for download
             df.to_excel(out_file, index=False)
             
             with open(out_file, "rb") as f:
@@ -85,7 +121,6 @@ if st.sidebar.button("🚀 Run Analysis", type="primary"):
             df['Backtest Sticky Notes'] = df['Ticker'].apply(lambda x: notes.get(str(x).upper(), ''))
             
             st.dataframe(df, use_container_width=True)
-            
             df.to_excel(out_file, index=False)
             
             with open(out_file, "rb") as f:
@@ -99,11 +134,10 @@ if st.sidebar.button("🚀 Run Analysis", type="primary"):
 # Sticky Notes & Backtest Journal Section
 st.markdown("---")
 st.header("📌 Sticky Notes & Backtest Journal")
-st.write("Write notes or backtest findings for any stock. They will persist across sessions and attach to your Excel downloads.")
+st.write("Write notes or backtest findings for any stock.")
 
 if tickers:
     selected_ticker = st.selectbox("Select Ticker to View/Edit Note:", tickers)
-    
     current_note = notes.get(selected_ticker, "")
     new_note = st.text_area(f"📝 Post-it Note for {selected_ticker}:", value=current_note, height=120)
     
@@ -116,7 +150,10 @@ if tickers:
     if current_note:
         st.info(f"**Saved Note for {selected_ticker}:**\n\n{current_note}")
 
- 
+
+  
+
+       
 
             
       
