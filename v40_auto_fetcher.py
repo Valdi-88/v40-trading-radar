@@ -206,6 +206,3 @@ def create_v40_analysis_workbook(ticker_list, output_filename="v40_automated_ana
         ws_dash.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(output_filename)
- 
-
-Would you like to test running a scan across all 3 engines once you update GitHub?
