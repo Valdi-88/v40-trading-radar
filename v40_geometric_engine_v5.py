@@ -1,4 +1,3 @@
-
 import os
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -14,6 +13,9 @@ except ImportError:
     HAS_LIBS = False
 
 def safe_1d(df, col_name):
+    """
+    Extracts a column from df as a guaranteed 1D float numpy array.
+    """
     if col_name not in df.columns:
         matches = [c for c in df.columns if (isinstance(c, tuple) and c == col_name) or c == col_name]
         if matches:
@@ -29,6 +31,18 @@ def safe_1d(df, col_name):
     return np.asarray(sub, dtype=float).ravel()
 
 def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
+    """
+    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION (WITH COMPLEX MULTI-SHOULDER & MULTI-HANDLE SUPPORT):
+    Implements exact rules from Vivek Singhal's trading strategy lessons:
+    1. 180° Flat Horizontal Necklines (Peaks must be within 2.0% of each other).
+    2. Lifetime High Gate (Must be at least 8-10% below 52-week / Lifetime Highs).
+    3. Distinct Head Depth (Head must be at least 4% deeper than shoulders).
+    4. Complex Patterns Support:
+       - Multi-Shoulder Reverse H&S (e.g. 2 Left Shoulders / 2 Right Shoulders)
+       - Multi-Handle Cup & Handle (e.g. Double Handle Consolidation)
+    5. 2-Step Confirmation (2nd green candle must close ABOVE the HIGH of breakout candle).
+    6. Exact Start-to-End Date Spans for all components.
+    """
     ticker = ticker.strip().upper()
     
     default_no_pattern = {
@@ -64,8 +78,10 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         cmp_val = round(float(close_arr[-1]), 2)
         default_no_pattern['cmp'] = cmp_val
 
+        # Lifetime High Gate (52-week High)
         lifetime_high = float(np.max(high_arr))
         
+        # Recent Window
         df_recent = df.tail(lookback_days).copy()
         prices = safe_1d(df_recent, 'Close')
         opens = safe_1d(df_recent, 'Open')
@@ -90,7 +106,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN WITH FULL START-TO-END DATE SPANS
+        # 1. W-PATTERN WITH START-TO-END DATE SPANS
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -172,101 +188,123 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         break
 
         # -------------------------------------------------------------
-        # 2. REVERSE HEAD & SHOULDERS WITH FULL DATE SPANS
+        # 2. REVERSE HEAD & SHOULDERS (STANDARD & COMPLEX MULTI-SHOULDER)
         # -------------------------------------------------------------
         if len(troughs) >= 3:
-            for i in range(len(troughs) - 3, -1, -1):
-                s1_idx, h_idx, s2_idx = troughs[i], troughs[i+1], troughs[i+2]
-                if (len(prices) - s2_idx) > 30:
-                    continue
+            for num_tr in range(min(5, len(troughs)), 2, -1):
+                for i in range(len(troughs) - num_tr, -1, -1):
+                    sub_troughs = troughs[i:i+num_tr]
+                    if (len(prices) - sub_troughs[-1]) > 30:
+                        continue
 
-                s1_p, h_p, s2_p = float(lows[s1_idx]), float(lows[h_idx]), float(lows[s2_idx])
+                    h_local_idx = min(range(len(sub_troughs)), key=lambda k: float(lows[sub_troughs[k]]))
+                    
+                    if h_local_idx == 0 or h_local_idx == len(sub_troughs) - 1:
+                        continue
 
-                if h_p < (s1_p * 0.96) and h_p < (s2_p * 0.96):
-                    min_shoulder = min(s1_p, s2_p)
-                    if min_shoulder > 0 and (abs(s1_p - s2_p) / min_shoulder) <= 0.05:
-                        p1_between = [p for p in peaks if s1_idx < p < h_idx]
-                        p2_between = [p for p in peaks if h_idx < p < s2_idx]
+                    h_idx = sub_troughs[h_local_idx]
+                    h_p = float(lows[h_idx])
 
-                        if p1_between and p2_between:
-                            nk1_idx = max(p1_between, key=lambda p: float(highs[p]))
-                            nk2_idx = max(p2_between, key=lambda p: float(highs[p]))
-                            nk1 = float(highs[nk1_idx])
-                            nk2 = float(highs[nk2_idx])
+                    left_shoulders = sub_troughs[:h_local_idx]
+                    right_shoulders = sub_troughs[h_local_idx+1:]
 
-                            if abs(nk1 - nk2) / min(nk1, nk2) > 0.020:
-                                continue
+                    all_shoulders_p = [float(lows[s]) for s in left_shoulders + right_shoulders]
+                    min_shoulder_p = min(all_shoulders_p)
 
-                            neckline = round(float((nk1 + nk2) / 2.0), 2)
-                            
-                            if neckline >= (0.92 * lifetime_high):
-                                continue
+                    if h_p < (min_shoulder_p * 0.96):
+                        if (max(all_shoulders_p) - min(all_shoulders_p)) / min_shoulder_p <= 0.055:
+                            shoulder_peaks = []
+                            for idx_s in range(len(sub_troughs) - 1):
+                                t_a, t_b = sub_troughs[idx_s], sub_troughs[idx_s+1]
+                                between_p = [p for p in peaks if t_a < p < t_b]
+                                if between_p:
+                                    peak_idx = max(between_p, key=lambda p: float(highs[p]))
+                                    shoulder_peaks.append(peak_idx)
 
-                            height = neckline - h_p
-                            target = round(neckline + height, 2)
-                            dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+                            if len(shoulder_peaks) >= 2:
+                                peak_vals = [float(highs[p]) for p in shoulder_peaks]
+                                min_nk, max_nk = min(peak_vals), max(peak_vals)
 
-                            breakout_idx = None
-                            for idx_c in range(s2_idx, len(prices)):
-                                if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
-                                    breakout_idx = idx_c
+                                if (max_nk - min_nk) / min_nk <= 0.020:
+                                    neckline = round(float(np.mean(peak_vals)), 2)
+
+                                    if neckline >= (0.92 * lifetime_high):
+                                        continue
+
+                                    height = neckline - h_p
+                                    target = round(neckline + height, 2)
+                                    dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+
+                                    breakout_idx = None
+                                    for idx_c in range(sub_troughs[-1], len(prices)):
+                                        if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
+                                            breakout_idx = idx_c
+                                            break
+
+                                    is_complex = len(left_shoulders) > 1 or len(right_shoulders) > 1
+                                    pattern_label = 'Fresh Complex Reverse H&S (Multi-Shoulder)' if is_complex else 'Fresh Reverse H&S'
+
+                                    ls_start = dates[max(0, sub_troughs - 7)]
+                                    head_date = dates[h_idx]
+                                    rs_end = dates[-1]
+
+                                    if is_complex:
+                                        date_span_str = f"LS ({len(left_shoulders)}): {ls_start}➔{dates[h_idx-1]} | Head: {dates[h_idx-1]}➔{head_date} | RS ({len(right_shoulders)}): {head_date}➔{rs_end}"
+                                    else:
+                                        date_span_str = f"LS: {ls_start}➔{dates[shoulder_peaks]} | Head: {dates[shoulder_peaks]}➔{dates[shoulder_peaks[-1]]} | RS: {dates[shoulder_peaks[-1]]}➔{rs_end}"
+
+                                    if cmp_val >= neckline:
+                                        if dist_pct > max_breakout_pct:
+                                            continue
+                                        
+                                        if breakout_idx is not None and breakout_idx < len(prices) - 1:
+                                            breakout_high = highs[breakout_idx]
+                                            if prices[-1] > breakout_high and is_green_today:
+                                                status = 'CONFIRMED BREAKOUT (Closed Above Breakout High)'
+                                                signal = 'BUY MORNING (2-Step Confirmed)'
+                                            else:
+                                                status = 'INITIAL BREAKOUT (Wait for High Confirmation)'
+                                                signal = f'WATCHLIST (Wait close above ₹{round(breakout_high, 1)})'
+                                        else:
+                                            status = 'INITIAL BREAKOUT (1st Green Candle)'
+                                            signal = 'WATCHLIST (Wait 2nd Green Candle)'
+                                    else:
+                                        if dist_pct >= -5.0:
+                                            status = 'APPROACHING BREAKOUT'
+                                            signal = f'WATCHLIST (Alert at ₹{neckline})'
+                                        else:
+                                            status = 'FORMING RIGHT SHOULDER'
+                                            signal = 'WATCHLIST ONLY'
+
+                                    detected_patterns.append({
+                                        'ticker': ticker,
+                                        'pattern_type': pattern_label,
+                                        'cmp': cmp_val,
+                                        'neckline_price': neckline,
+                                        'dist_to_breakout_pct': dist_pct,
+                                        'breakout_status': status,
+                                        'projected_target': target,
+                                        'anchor_dates': date_span_str,
+                                        'action_signal': signal
+                                    })
                                     break
 
-                            # Date Spans
-                            ls_start = dates[max(0, s1_idx - 7)]
-                            ls_end = dates[nk1_idx]
-                            head_end = dates[nk2_idx]
-                            rs_end = dates[-1]
-                            date_span_str = f"LS: {ls_start}➔{ls_end} | Head: {ls_end}➔{head_end} | RS: {head_end}➔{rs_end}"
-
-                            if cmp_val >= neckline:
-                                if dist_pct > max_breakout_pct:
-                                    continue
-                                
-                                if breakout_idx is not None and breakout_idx < len(prices) - 1:
-                                    breakout_high = highs[breakout_idx]
-                                    if prices[-1] > breakout_high and is_green_today:
-                                        status = 'CONFIRMED BREAKOUT (Closed Above Breakout High)'
-                                        signal = 'BUY MORNING (2-Step Confirmed)'
-                                    else:
-                                        status = 'INITIAL BREAKOUT (Wait for High Confirmation)'
-                                        signal = f'WATCHLIST (Wait close above ₹{round(breakout_high, 1)})'
-                                else:
-                                    status = 'INITIAL BREAKOUT (1st Green Candle)'
-                                    signal = 'WATCHLIST (Wait 2nd Green Candle)'
-                            else:
-                                if dist_pct >= -5.0:
-                                    status = 'APPROACHING BREAKOUT'
-                                    signal = f'WATCHLIST (Alert at ₹{neckline})'
-                                else:
-                                    status = 'FORMING RIGHT SHOULDER'
-                                    signal = 'WATCHLIST ONLY'
-
-                            detected_patterns.append({
-                                'ticker': ticker,
-                                'pattern_type': 'Fresh Reverse H&S',
-                                'cmp': cmp_val,
-                                'neckline_price': neckline,
-                                'dist_to_breakout_pct': dist_pct,
-                                'breakout_status': status,
-                                'projected_target': target,
-                                'anchor_dates': date_span_str,
-                                'action_signal': signal
-                            })
-                            break
-
         # -------------------------------------------------------------
-        # 3. CUP WITH HANDLE WITH FULL START-TO-END DATE SPANS
+        # 3. CUP WITH HANDLE (STANDARD & COMPLEX DOUBLE-HANDLE)
         # -------------------------------------------------------------
         if len(troughs) >= 2 and len(peaks) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
                 t_cup = troughs[i]
-                if len(prices) - t_cup > 50:
+                if len(prices) - t_cup > 60:
                     continue
                 rim_peaks = [p for p in peaks if p < t_cup]
                 handle_peaks = [p for p in peaks if p > t_cup]
                 if rim_peaks and handle_peaks:
                     p_rim = max(rim_peaks, key=lambda p: float(highs[p]))
+                    
+                    handle_troughs = [t for t in troughs if t > t_cup]
+                    is_double_handle = len(handle_troughs) >= 2
+
                     p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
                     rim_val = float(highs[p_rim])
                     handle_val = float(highs[p_handle])
@@ -290,11 +328,17 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     breakout_idx = idx_c
                                     break
 
-                            # Date Spans
+                            pattern_label = 'Fresh Complex Cup with Handle (Double Handle)' if is_double_handle else 'Fresh Cup with Handle'
                             cup_start = dates[p_rim]
-                            cup_end = dates[p_handle]
-                            handle_end = dates[-1]
-                            date_span_str = f"Cup: {cup_start} ➔ {cup_end} | Handle: {cup_end} ➔ {handle_end}"
+                            cup_end = dates[handle_peaks]
+                            
+                            if is_double_handle:
+                                h1_end = dates[handle_troughs]
+                                h2_end = dates[-1]
+                                date_span_str = f"Cup: {cup_start}➔{cup_end} | Handle 1: {cup_end}➔{h1_end} | Handle 2: {h1_end}➔{h2_end}"
+                            else:
+                                handle_end = dates[-1]
+                                date_span_str = f"Cup: {cup_start} ➔ {cup_end} | Handle: {cup_end} ➔ {handle_end}"
 
                             if cmp_val >= neckline:
                                 if dist_pct <= max_breakout_pct:
@@ -312,7 +356,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
 
                                     detected_patterns.append({
                                         'ticker': ticker,
-                                        'pattern_type': 'Fresh Cup with Handle',
+                                        'pattern_type': pattern_label,
                                         'cmp': cmp_val,
                                         'neckline_price': neckline,
                                         'dist_to_breakout_pct': dist_pct,
@@ -325,11 +369,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             elif dist_pct >= -6.0:
                                 detected_patterns.append({
                                     'ticker': ticker,
-                                    'pattern_type': 'Fresh Cup with Handle',
+                                    'pattern_type': pattern_label,
                                     'cmp': cmp_val,
                                     'neckline_price': neckline,
                                     'dist_to_breakout_pct': dist_pct,
-                                    'breakout_status': 'FORMING HANDLE / NEAR RIM',
+                                    'breakout_status': 'FORMING HANDLE / NEAR RESISTANCE',
                                     'projected_target': target,
                                     'anchor_dates': date_span_str,
                                     'action_signal': f'WATCHLIST (Alert at ₹{neckline})'
@@ -391,14 +435,14 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
         pass
 
     ws.merge_cells("A1:I1")
-    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (EXACT DATE SPANS)")
+    t_cell = ws.cell(row=1, column=1, value="V40 PARALLEL GEOMETRIC PATTERN RADAR (STANDARD & COMPLEX PATTERNS)")
     t_cell.font = font_title
     t_cell.fill = fill_navy
     t_cell.alignment = align_center
     ws.row_dimensions.height = 35
 
     ws.merge_cells("A2:I2")
-    sub_cell = ws.cell(row=2, column=1, value="Shows Full Start ➔ End Date Spans for Cups, Handles, Leg 1/2 & Shoulders")
+    sub_cell = ws.cell(row=2, column=1, value="Detects Complex Multi-Shoulders (Rev H&S) & Double Handles (Cup & Handle) with Exact Date Spans")
     sub_cell.font = Font(name="Calibri", size=10, italic=True, color="FFFFFF")
     sub_cell.fill = fill_blue_head
     sub_cell.alignment = align_center
@@ -476,7 +520,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [18, 26, 14, 22, 20, 34, 18, 48, 32]
+    col_widths = [18, 32, 14, 18, 20, 35, 18, 48, 32]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
