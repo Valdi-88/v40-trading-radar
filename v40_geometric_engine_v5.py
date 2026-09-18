@@ -526,7 +526,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths =
+    col_widths = [18, 38, 14, 18, 20, 32, 18, 55, 32]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
