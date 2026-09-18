@@ -1,3 +1,4 @@
+
 import os
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -32,16 +33,15 @@ def safe_1d(df, col_name):
 
 def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
     """
-    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION (WITH COMPLEX MULTI-SHOULDER & MULTI-HANDLE SUPPORT):
-    Implements exact rules from Vivek Singhal's trading strategy lessons:
-    1. 180° Flat Horizontal Necklines (Peaks must be within 2.0% of each other).
-    2. Lifetime High Gate (Must be at least 8-10% below 52-week / Lifetime Highs).
-    3. Distinct Head Depth (Head must be at least 4% deeper than shoulders).
-    4. Complex Patterns Support:
-       - Multi-Shoulder Reverse H&S (e.g. 2 Left Shoulders / 2 Right Shoulders)
-       - Multi-Handle Cup & Handle (e.g. Double Handle Consolidation)
+    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION (STANDARD & COMPLEX PATTERNS):
+    1. 180° Flat Horizontal Resistance (Max 2.0% variance between peaks).
+    2. Lifetime High Gate (Neckline must be >8-10% below 52-week high).
+    3. Distinct Head Depth (Head must be >=4% deeper than shoulders).
+    4. Complex Pattern Support:
+       - Multi-Shoulder Reverse H&S
+       - Double-Handle Cup with Handle
     5. 2-Step Confirmation (2nd green candle must close ABOVE the HIGH of breakout candle).
-    6. Exact Start-to-End Date Spans for all components.
+    6. Exact Start ➔ End Date Spans.
     """
     ticker = ticker.strip().upper()
     
@@ -106,7 +106,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN WITH START-TO-END DATE SPANS
+        # 1. W-PATTERN (DOUBLE BOTTOM)
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -188,17 +188,17 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         break
 
         # -------------------------------------------------------------
-        # 2. REVERSE HEAD & SHOULDERS (STANDARD & COMPLEX MULTI-SHOULDER)
+        # 2. REVERSE HEAD & SHOULDERS (STANDARD & COMPLEX)
         # -------------------------------------------------------------
         if len(troughs) >= 3:
             for num_tr in range(min(5, len(troughs)), 2, -1):
+                found_rhs = False
                 for i in range(len(troughs) - num_tr, -1, -1):
                     sub_troughs = troughs[i:i+num_tr]
                     if (len(prices) - sub_troughs[-1]) > 30:
                         continue
 
                     h_local_idx = min(range(len(sub_troughs)), key=lambda k: float(lows[sub_troughs[k]]))
-                    
                     if h_local_idx == 0 or h_local_idx == len(sub_troughs) - 1:
                         continue
 
@@ -244,14 +244,17 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     is_complex = len(left_shoulders) > 1 or len(right_shoulders) > 1
                                     pattern_label = 'Fresh Complex Reverse H&S (Multi-Shoulder)' if is_complex else 'Fresh Reverse H&S'
 
-                                    ls_start = dates[max(0, sub_troughs - 7)]
+                                    ls_first_idx = left_shoulders
+                                    ls_start = dates[max(0, ls_first_idx - 7)]
                                     head_date = dates[h_idx]
+                                    nk1_date = dates[shoulder_peaks]
+                                    nk2_date = dates[shoulder_peaks[-1]]
                                     rs_end = dates[-1]
 
                                     if is_complex:
-                                        date_span_str = f"LS ({len(left_shoulders)}): {ls_start}➔{dates[h_idx-1]} | Head: {dates[h_idx-1]}➔{head_date} | RS ({len(right_shoulders)}): {head_date}➔{rs_end}"
+                                        date_span_str = f"LS ({len(left_shoulders)}): {ls_start}➔{nk1_date} | Head: {nk1_date}➔{head_date} | RS ({len(right_shoulders)}): {head_date}➔{rs_end}"
                                     else:
-                                        date_span_str = f"LS: {ls_start}➔{dates[shoulder_peaks]} | Head: {dates[shoulder_peaks]}➔{dates[shoulder_peaks[-1]]} | RS: {dates[shoulder_peaks[-1]]}➔{rs_end}"
+                                        date_span_str = f"LS: {ls_start}➔{nk1_date} | Head: {nk1_date}➔{nk2_date} | RS: {nk2_date}➔{rs_end}"
 
                                     if cmp_val >= neckline:
                                         if dist_pct > max_breakout_pct:
@@ -287,7 +290,10 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                         'anchor_dates': date_span_str,
                                         'action_signal': signal
                                     })
+                                    found_rhs = True
                                     break
+                if found_rhs:
+                    break
 
         # -------------------------------------------------------------
         # 3. CUP WITH HANDLE (STANDARD & COMPLEX DOUBLE-HANDLE)
@@ -301,11 +307,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                 handle_peaks = [p for p in peaks if p > t_cup]
                 if rim_peaks and handle_peaks:
                     p_rim = max(rim_peaks, key=lambda p: float(highs[p]))
+                    p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
                     
                     handle_troughs = [t for t in troughs if t > t_cup]
                     is_double_handle = len(handle_troughs) >= 2
 
-                    p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
                     rim_val = float(highs[p_rim])
                     handle_val = float(highs[p_handle])
 
@@ -330,7 +336,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
 
                             pattern_label = 'Fresh Complex Cup with Handle (Double Handle)' if is_double_handle else 'Fresh Cup with Handle'
                             cup_start = dates[p_rim]
-                            cup_end = dates[handle_peaks]
+                            cup_end = dates[p_handle]
                             
                             if is_double_handle:
                                 h1_end = dates[handle_troughs]
@@ -520,9 +526,8 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [18, 32, 14, 18, 20, 35, 18, 48, 32]
+    col_widths =
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     wb.save(output_filename)
-
