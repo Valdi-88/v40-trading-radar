@@ -90,110 +90,126 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN (STRICT HORIZONTAL FLOOR & FALL START PEAK)
+        # 1. W-PATTERN (NON-ADJACENT PAIRING, 2-4 MO DURATION, LEG BALANCE)
         # -------------------------------------------------------------
         if len(troughs) >= 2:
-            for i in range(len(troughs) - 2, -1, -1):
-                t1, t2 = troughs[i], troughs[i+1]
-                if (n_recent - t2) > 30 or (t2 - t1) < 5:
-                    continue
+            for i in range(len(troughs) - 1, -1, -1):
+                found_w = False
+                for j in range(i + 1, min(i + 3, len(troughs))):
+                    t1, t2 = troughs[i], troughs[j]
+                    
+                    # Recency check on L2: must be within last 30 trading days
+                    if (n_recent - t2) > 30:
+                        continue
 
-                p1_val, p2_val = float(lows[t1]), float(lows[t2])
-                min_bottom = min(p1_val, p2_val)
+                    # Timeframe Gate: 15 to 80 trading days (~2 to 4 months)
+                    if not (15 <= (t2 - t1) <= 80):
+                        continue
 
-                # Strict floor alignment: L1 and L2 within 1.5% tolerance
-                if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.015:
-                    between_peaks = [p for p in peaks if t1 < p < t2]
-                    if between_peaks:
-                        nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
-                        neckline = round(float(highs[nk_idx]), 2)
-                        
-                        if neckline >= (0.92 * lifetime_high):
-                            continue
+                    p1_val, p2_val = float(lows[t1]), float(lows[t2])
+                    min_bottom = min(p1_val, p2_val)
 
-                        pattern_depth_pct = ((neckline - min_bottom) / neckline) * 100
-                        if not (4.5 <= pattern_depth_pct <= 15.0):
-                            continue
-
-                        # Identify the actual peak before t1 where the initial fall started
-                        prior_peaks = [p for p in peaks if p < t1]
-                        if prior_peaks:
-                            p_start = max(prior_peaks, key=lambda p: float(highs[p]))
-                        else:
-                            p_start = int(np.argmax(highs[:t1])) if t1 > 0 else 0
-
-                        fall_start_price = round(float(highs[p_start]), 2)
-                        fall_start_date = dates[p_start]
-
-                        # SOURCE RULE: Top of fall verification (must have fallen >=4% into L1)
-                        if fall_start_price > 0 and ((fall_start_price - p1_val) / fall_start_price) < 0.04:
-                            continue
-
-                        # Target from source: highest closing price from where original fall began
-                        full_t1_idx = len(close_arr) - n_recent + t1
-                        full_prior_prices = close_arr[:full_t1_idx]
-                        if len(full_prior_prices) > 0:
-                            prior_highest_close = round(float(np.max(full_prior_prices)), 2)
-                            target = max(prior_highest_close, round(neckline + (neckline - min_bottom), 2))
-                        else:
-                            target = round(neckline + (neckline - min_bottom), 2)
-
-                        dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
-
-                        # Floor invalidation gate
-                        if cmp_val < min_bottom:
-                            continue  
-
-                        # Search for breakout candle starting from t2
-                        breakout_idx = None
-                        for idx_c in range(t2, n_recent):
-                            if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
-                                breakout_idx = idx_c
-                                break
-
-                        # Fresh breakout recency gate
-                        if breakout_idx is not None and breakout_idx < (n_recent - 2):
-                            continue  
-
-                        t1_date = dates[t1]
-                        nk_date = dates[nk_idx]
-                        t2_date = dates[t2]
-                        end_date = dates[-1]
-
-                        date_span_str = f"Fall Start: {fall_start_date} (₹{fall_start_price}) ➔ L1: {t1_date} ➔ Peak: {nk_date} ➔ L2: {t2_date} | Span: {fall_start_date} ➔ {end_date}"
-
-                        if breakout_idx == (n_recent - 1):
-                            if dist_pct > max_breakout_pct:
+                    # Strict floor alignment: L1 and L2 within 1.5% tolerance
+                    if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.015:
+                        between_peaks = [p for p in peaks if t1 < p < t2]
+                        if between_peaks:
+                            nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
+                            
+                            # Leg Balance Gate: mid-point peak must be at least 5 trading days away from both L1 and L2
+                            if (nk_idx - t1) < 5 or (t2 - nk_idx) < 5:
                                 continue
-                            status = 'INITIAL BREAKOUT (1st Green Candle Today)'
-                            signal = 'WATCHLIST (Wait for 2nd Green Candle)'
-                        elif breakout_idx == (n_recent - 2):
-                            breakout_high = highs[breakout_idx]
-                            if cmp_val > breakout_high and is_green_today:
-                                status = 'CONFIRMED BREAKOUT (Closed Above Breakout High Today)'
-                                signal = 'BUY MORNING (2-Step Confirmed)'
-                            else:
-                                continue
-                        else:
-                            if dist_pct >= -5.0:
-                                status = 'APPROACHING BREAKOUT'
-                                signal = f'WATCHLIST (Alert at ₹{neckline})'
-                            else:
-                                status = 'FORMING RIGHT LEG'
-                                signal = 'WATCHLIST ONLY'
 
-                        detected_patterns.append({
-                            'ticker': ticker,
-                            'pattern_type': 'Fresh W-Pattern',
-                            'cmp': cmp_val,
-                            'neckline_price': neckline,
-                            'dist_to_breakout_pct': dist_pct,
-                            'breakout_status': status,
-                            'projected_target': target,
-                            'anchor_dates': date_span_str,
-                            'action_signal': signal
-                        })
-                        break
+                            neckline = round(float(highs[nk_idx]), 2)
+                            
+                            if neckline >= (0.92 * lifetime_high):
+                                continue
+
+                            pattern_depth_pct = ((neckline - min_bottom) / neckline) * 100
+                            if not (4.5 <= pattern_depth_pct <= 15.0):
+                                continue
+
+                            # Identify the actual peak before t1 where the initial fall started
+                            prior_peaks = [p for p in peaks if p < t1]
+                            if prior_peaks:
+                                p_start = max(prior_peaks, key=lambda p: float(highs[p]))
+                            else:
+                                p_start = int(np.argmax(highs[:t1])) if t1 > 0 else 0
+
+                            fall_start_price = round(float(highs[p_start]), 2)
+                            fall_start_date = dates[p_start]
+
+                            # SOURCE RULE: Top of fall verification (must have fallen >=4% into L1)
+                            if fall_start_price > 0 and ((fall_start_price - p1_val) / fall_start_price) < 0.04:
+                                continue
+
+                            # Preferred target from source: highest closing price from where original fall began
+                            full_t1_idx = len(close_arr) - n_recent + t1
+                            full_prior_prices = close_arr[:full_t1_idx]
+                            if len(full_prior_prices) > 0:
+                                prior_highest_close = round(float(np.max(full_prior_prices)), 2)
+                                target = max(prior_highest_close, round(neckline + (neckline - min_bottom), 2))
+                            else:
+                                target = round(neckline + (neckline - min_bottom), 2)
+
+                            dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
+
+                            # Floor invalidation gate
+                            if cmp_val < min_bottom:
+                                continue  
+
+                            # Search for breakout candle starting from t2
+                            breakout_idx = None
+                            for idx_c in range(t2, n_recent):
+                                if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
+                                    breakout_idx = idx_c
+                                    break
+
+                            # Fresh breakout recency gate (must be within last 2 days)
+                            if breakout_idx is not None and breakout_idx < (n_recent - 2):
+                                continue  
+
+                            t1_date = dates[t1]
+                            nk_date = dates[nk_idx]
+                            t2_date = dates[t2]
+                            end_date = dates[-1]
+
+                            date_span_str = f"Fall Start: {fall_start_date} (₹{fall_start_price}) ➔ L1: {t1_date} ➔ Peak: {nk_date} ➔ L2: {t2_date} | Span: {fall_start_date} ➔ {end_date}"
+
+                            if breakout_idx == (n_recent - 1):
+                                if dist_pct > max_breakout_pct:
+                                    continue
+                                status = 'INITIAL BREAKOUT (1st Green Candle Today)'
+                                signal = 'WATCHLIST (Wait for 2nd Green Candle)'
+                            elif breakout_idx == (n_recent - 2):
+                                breakout_high = highs[breakout_idx]
+                                if cmp_val > breakout_high and is_green_today:
+                                    status = 'CONFIRMED BREAKOUT (Closed Above Breakout High Today)'
+                                    signal = 'BUY MORNING (2-Step Confirmed)'
+                                else:
+                                    continue
+                            else:
+                                if dist_pct >= -5.0:
+                                    status = 'APPROACHING BREAKOUT'
+                                    signal = f'WATCHLIST (Alert at ₹{neckline})'
+                                else:
+                                    status = 'FORMING RIGHT LEG'
+                                    signal = 'WATCHLIST ONLY'
+
+                            detected_patterns.append({
+                                'ticker': ticker,
+                                'pattern_type': 'Fresh W-Pattern',
+                                'cmp': cmp_val,
+                                'neckline_price': neckline,
+                                'dist_to_breakout_pct': dist_pct,
+                                'breakout_status': status,
+                                'projected_target': target,
+                                'anchor_dates': date_span_str,
+                                'action_signal': signal
+                            })
+                            found_w = True
+                            break
+                if found_w:
+                    break
 
         # -------------------------------------------------------------
         # 2. REVERSE HEAD & SHOULDERS (STANDARD & COMPLEX)
@@ -547,7 +563,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [1-6]
+    col_widths = [4-9]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
