@@ -14,9 +14,6 @@ except ImportError:
     HAS_LIBS = False
 
 def safe_1d(df, col_name):
-    """
-    Extracts a column from df as a guaranteed 1D float numpy array.
-    """
     if col_name not in df.columns:
         matches = [c for c in df.columns if (isinstance(c, tuple) and c == col_name) or c == col_name]
         if matches:
@@ -32,17 +29,6 @@ def safe_1d(df, col_name):
     return np.asarray(sub, dtype=float).ravel()
 
 def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
-    """
-    SOURCE-GROUNDED PARALLEL PATTERN EVALUATION (STANDARD & COMPLEX PATTERNS):
-    1. 180° Flat Horizontal Resistance (Max 2.0% variance between peaks).
-    2. Lifetime High Gate (Neckline must be >8-10% below 52-week high).
-    3. Distinct Head Depth (Head must be >=4% deeper than shoulders).
-    4. Complex Pattern Support:
-       - Multi-Shoulder Reverse H&S
-       - Double-Handle Cup with Handle
-    5. 2-Step Confirmation (2nd green candle must close ABOVE the HIGH of breakout candle).
-    6. Exact Start ➔ End Date Spans.
-    """
     ticker = ticker.strip().upper()
     
     default_no_pattern = {
@@ -78,10 +64,8 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         cmp_val = round(float(close_arr[-1]), 2)
         default_no_pattern['cmp'] = cmp_val
 
-        # Lifetime High Gate (52-week High)
         lifetime_high = float(np.max(high_arr))
         
-        # Recent Window
         df_recent = df.tail(lookback_days).copy()
         prices = safe_1d(df_recent, 'Close')
         opens = safe_1d(df_recent, 'Open')
@@ -106,7 +90,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN (DOUBLE BOTTOM)
+        # 1. W-PATTERN (WITH INVALIDATION & EXPIRATION FILTER)
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -127,12 +111,13 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             continue
 
                         pattern_depth_pct = ((neckline - min_bottom) / neckline) * 100
-                        if pattern_depth_pct < 4.5:
+                        if not (4.5 <= pattern_depth_pct <= 15.0):
                             continue
 
-                        prior_prices = prices[:t1]
-                        if len(prior_prices) > 0:
-                            prior_highest_close = round(float(np.max(prior_prices)), 2)
+                        full_t1_idx = len(close_arr) - len(prices) + t1
+                        full_prior_prices = close_arr[:full_t1_idx]
+                        if len(full_prior_prices) > 0:
+                            prior_highest_close = round(float(np.max(full_prior_prices)), 2)
                             target = max(prior_highest_close, round(neckline + (neckline - min_bottom), 2))
                         else:
                             target = round(neckline + (neckline - min_bottom), 2)
@@ -145,28 +130,18 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 breakout_idx = idx_c
                                 break
 
-                        # ========================================================= 
-                        # 📍 ADD THE INVALIDATION CHECK RIGHT HERE 
-                        # ========================================================= 
-                        # 1. If CMP fell below L2 support, the pattern is dead 
-                        if cmp_val < min_bottom: 
-                            continue # Floor broken -> Skip pattern 
-                        # 2. If breakout happened in past but CMP fell back below neckline 
-                        if breakout_idx is not None and cmp_val < neckline: 
-                            continue # Past breakout collapsed -> Skip expired pattern 
-                        # ========================================================= 
-                        if cmp_val >= neckline: 
-                            # ... rest of breakout status logic ...
-                            
-                        # Date Spans
-                        # Extract exact milestone dates
-                        t1_date = dates[t1] # Date of 1st Bottom (L1) 
-                        nk_date = dates[nk_idx] # Date of Mid-Point Peak 
-                        t2_date = dates[t2] # Date of 2nd Bottom (L2) 
-                        start_date = dates[max(0, t1 - 10)] # Estimated start of fall 
-                        end_date = dates[-1] # Latest candle / Breakout 
-                        
-                        # Precise milestone date string 
+                        # --- INVALIDATION FILTER ---
+                        if cmp_val < min_bottom:
+                            continue  # Floor broken -> Skip
+
+                        if breakout_idx is not None and cmp_val < neckline:
+                            continue  # Past breakout collapsed -> Skip expired
+
+                        t1_date = dates[t1]
+                        nk_date = dates[nk_idx]
+                        t2_date = dates[t2]
+                        start_date = dates[max(0, t1 - 10)]
+                        end_date = dates[-1]
                         date_span_str = f"L1 Low: {t1_date} | Peak: {nk_date} | L2 Low: {t2_date} | Span: {start_date} ➔ {end_date}"
 
                         if cmp_val >= neckline:
@@ -258,6 +233,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                         if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
                                             breakout_idx = idx_c
                                             break
+
+                                    if cmp_val < h_p:
+                                        continue
+                                    if breakout_idx is not None and cmp_val < neckline:
+                                        continue
 
                                     is_complex = len(left_shoulders) > 1 or len(right_shoulders) > 1
                                     pattern_label = 'Fresh Complex Reverse H&S (Multi-Shoulder)' if is_complex else 'Fresh Reverse H&S'
@@ -351,6 +331,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 if prices[idx_c] >= neckline and prices[idx_c] > opens[idx_c]:
                                     breakout_idx = idx_c
                                     break
+
+                            if cmp_val < float(lows[t_cup]):
+                                continue
+                            if breakout_idx is not None and cmp_val < neckline:
+                                continue
 
                             pattern_label = 'Fresh Complex Cup with Handle (Double Handle)' if is_double_handle else 'Fresh Cup with Handle'
                             cup_start = dates[p_rim]
