@@ -146,10 +146,15 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 break
 
                         # Date Spans
-                        pattern_start_date = dates[max(0, t1 - 10)]
-                        nk_date = dates[nk_idx]
-                        end_date = dates[-1]
-                        date_span_str = f"L1: {pattern_start_date} ➔ {nk_date} | L2: {nk_date} ➔ {end_date}"
+                        # Extract exact milestone dates
+                        t1_date = dates[t1] # Date of 1st Bottom (L1) 
+                        nk_date = dates[nk_idx] # Date of Mid-Point Peak 
+                        t2_date = dates[t2] # Date of 2nd Bottom (L2) 
+                        start_date = dates[max(0, t1 - 10)] # Estimated start of fall 
+                        end_date = dates[-1] # Latest candle / Breakout 
+                        
+                        # Precise milestone date string 
+                        date_span_str = f"L1 Low: {t1_date} | Peak: {nk_date} | L2 Low: {t2_date} | Span: {start_date} ➔ {end_date}"
 
                         if cmp_val >= neckline:
                             if dist_pct > max_breakout_pct:
