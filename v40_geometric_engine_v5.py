@@ -101,7 +101,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                 p1_val, p2_val = float(lows[t1]), float(lows[t2])
                 min_bottom = min(p1_val, p2_val)
 
-                if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.035:
+                if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.015:
                     between_peaks = [p for p in peaks if t1 < p < t2]
                     if between_peaks:
                         nk_idx = max(between_peaks, key=lambda p: float(highs[p]))
