@@ -90,7 +90,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN (STRICT FRESH 2-STEP BREAKOUT & INVALIDATION)
+        # 1. W-PATTERN (EXACT FALL START PEAK & RECENT 2-STEP CONFIRMATION)
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -101,6 +101,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                 p1_val, p2_val = float(lows[t1]), float(lows[t2])
                 min_bottom = min(p1_val, p2_val)
 
+                # Floor alignment check (max 1.5% variance between L1 and L2)
                 if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.015:
                     between_peaks = [p for p in peaks if t1 < p < t2]
                     if between_peaks:
@@ -114,6 +115,21 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         if not (4.5 <= pattern_depth_pct <= 15.0):
                             continue
 
+                        # Identify the actual peak before t1 where the initial fall started
+                        prior_peaks = [p for p in peaks if p < t1]
+                        if prior_peaks:
+                            p_start = max(prior_peaks, key=lambda p: float(highs[p]))
+                        else:
+                            p_start = int(np.argmax(highs[:t1])) if t1 > 0 else 0
+
+                        fall_start_price = round(float(highs[p_start]), 2)
+                        fall_start_date = dates[p_start]
+
+                        # Ensure there was a real fall from p_start to L1 (at least 4% drop)
+                        if fall_start_price > 0 and ((fall_start_price - p1_val) / fall_start_price) < 0.04:
+                            continue
+
+                        # Preferred target from source: highest closing price from where original fall began
                         full_t1_idx = len(close_arr) - n_recent + t1
                         full_prior_prices = close_arr[:full_t1_idx]
                         if len(full_prior_prices) > 0:
@@ -124,9 +140,9 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
 
                         dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
 
-                        # --- FLOOR INVALIDATION ---
+                        # Floor invalidation gate
                         if cmp_val < min_bottom:
-                            continue  # Support floor broken -> Skip
+                            continue  
 
                         # Search for breakout candle starting from t2
                         breakout_idx = None
@@ -135,26 +151,24 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 breakout_idx = idx_c
                                 break
 
-                        # --- FRESH BREAKOUT RECENCY GATE ---
-                        # Skip if breakout happened 3+ days ago (expired)
+                        # Fresh breakout recency gate
                         if breakout_idx is not None and breakout_idx < (n_recent - 2):
                             continue  
 
                         t1_date = dates[t1]
                         nk_date = dates[nk_idx]
                         t2_date = dates[t2]
-                        start_date = dates[max(0, t1 - 10)]
                         end_date = dates[-1]
-                        date_span_str = f"L1 Low: {t1_date} | Peak: {nk_date} | L2 Low: {t2_date} | Span: {start_date} ➔ {end_date}"
+
+                        # Explicit milestone sequence starting from Fall Start Peak
+                        date_span_str = f"Fall Start: {fall_start_date} (₹{fall_start_price}) ➔ L1: {t1_date} ➔ Peak: {nk_date} ➔ L2: {t2_date} | Span: {fall_start_date} ➔ {end_date}"
 
                         if breakout_idx == (n_recent - 1):
-                            # Today is Candle 1 (1st Green Candle)
                             if dist_pct > max_breakout_pct:
                                 continue
                             status = 'INITIAL BREAKOUT (1st Green Candle Today)'
                             signal = 'WATCHLIST (Wait for 2nd Green Candle)'
                         elif breakout_idx == (n_recent - 2):
-                            # Yesterday was Candle 1, Today is Candle 2
                             breakout_high = highs[breakout_idx]
                             if cmp_val > breakout_high and is_green_today:
                                 status = 'CONFIRMED BREAKOUT (Closed Above Breakout High Today)'
@@ -162,7 +176,6 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                             else:
                                 continue
                         else:
-                            # Not broken out yet
                             if dist_pct >= -5.0:
                                 status = 'APPROACHING BREAKOUT'
                                 signal = f'WATCHLIST (Alert at ₹{neckline})'
@@ -241,7 +254,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                             break
 
                                     if breakout_idx is not None and breakout_idx < (n_recent - 2):
-                                        continue  # Past breakout -> Skip
+                                        continue  
 
                                     is_complex = len(left_shoulders) > 1 or len(right_shoulders) > 1
                                     pattern_label = 'Fresh Complex Reverse H&S (Multi-Shoulder)' if is_complex else 'Fresh Reverse H&S'
@@ -337,7 +350,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     break
 
                             if breakout_idx is not None and breakout_idx < (n_recent - 2):
-                                continue  # Past breakout -> Skip
+                                continue  
 
                             pattern_label = 'Fresh Complex Cup with Handle (Double Handle)' if is_double_handle else 'Fresh Cup with Handle'
                             cup_start = dates[p_rim]
@@ -520,7 +533,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [3-8]
+    col_widths = [5-11]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
