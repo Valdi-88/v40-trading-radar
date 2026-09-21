@@ -145,6 +145,19 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                 breakout_idx = idx_c
                                 break
 
+                        # ========================================================= 
+                        # 📍 ADD THE INVALIDATION CHECK RIGHT HERE 
+                        # ========================================================= 
+                        # 1. If CMP fell below L2 support, the pattern is dead 
+                        if cmp_val < min_bottom: 
+                            continue # Floor broken -> Skip pattern 
+                        # 2. If breakout happened in past but CMP fell back below neckline 
+                        if breakout_idx is not None and cmp_val < neckline: 
+                            continue # Past breakout collapsed -> Skip expired pattern 
+                        # ========================================================= 
+                        if cmp_val >= neckline: 
+                            # ... rest of breakout status logic ...
+                            
                         # Date Spans
                         # Extract exact milestone dates
                         t1_date = dates[t1] # Date of 1st Bottom (L1) 
