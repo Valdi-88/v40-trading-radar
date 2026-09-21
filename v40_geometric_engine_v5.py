@@ -90,7 +90,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
         detected_patterns = []
 
         # -------------------------------------------------------------
-        # 1. W-PATTERN (EXACT FALL START PEAK & RECENT 2-STEP CONFIRMATION)
+        # 1. W-PATTERN (STRICT HORIZONTAL FLOOR & FALL START PEAK)
         # -------------------------------------------------------------
         if len(troughs) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -101,7 +101,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                 p1_val, p2_val = float(lows[t1]), float(lows[t2])
                 min_bottom = min(p1_val, p2_val)
 
-                # Floor alignment check (max 1.5% variance between L1 and L2)
+                # Strict floor alignment: L1 and L2 within 1.5% tolerance
                 if min_bottom > 0 and (abs(p1_val - p2_val) / min_bottom) <= 0.015:
                     between_peaks = [p for p in peaks if t1 < p < t2]
                     if between_peaks:
@@ -125,11 +125,11 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         fall_start_price = round(float(highs[p_start]), 2)
                         fall_start_date = dates[p_start]
 
-                        # Ensure there was a real fall from p_start to L1 (at least 4% drop)
+                        # SOURCE RULE: Top of fall verification (must have fallen >=4% into L1)
                         if fall_start_price > 0 and ((fall_start_price - p1_val) / fall_start_price) < 0.04:
                             continue
 
-                        # Preferred target from source: highest closing price from where original fall began
+                        # Target from source: highest closing price from where original fall began
                         full_t1_idx = len(close_arr) - n_recent + t1
                         full_prior_prices = close_arr[:full_t1_idx]
                         if len(full_prior_prices) > 0:
@@ -160,7 +160,6 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         t2_date = dates[t2]
                         end_date = dates[-1]
 
-                        # Explicit milestone sequence starting from Fall Start Peak
                         date_span_str = f"Fall Start: {fall_start_date} (₹{fall_start_price}) ➔ L1: {t1_date} ➔ Peak: {nk_date} ➔ L2: {t2_date} | Span: {fall_start_date} ➔ {end_date}"
 
                         if breakout_idx == (n_recent - 1):
@@ -308,7 +307,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                     break
 
         # -------------------------------------------------------------
-        # 3. CUP WITH HANDLE (STANDARD & COMPLEX DOUBLE-HANDLE)
+        # 3. CUP WITH HANDLE (SOURCE GROUNDED: TOP OF FALL & HANDLE BOTTOM)
         # -------------------------------------------------------------
         if len(troughs) >= 2 and len(peaks) >= 2:
             for i in range(len(troughs) - 2, -1, -1):
@@ -320,6 +319,15 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                 if rim_peaks and handle_peaks:
                     p_rim = max(rim_peaks, key=lambda p: float(highs[p]))
                     p_handle = max(handle_peaks, key=lambda p: float(highs[p]))
+                    
+                    # SOURCE RULE 1: Top of Fall Verification
+                    # Ensure p_rim was preceded by an upward rally (not starting midway through a fall)
+                    prior_troughs_before_rim = [t for t in troughs if t < p_rim]
+                    if prior_troughs_before_rim:
+                        t_before_rim = max(prior_troughs_before_rim)
+                        pre_rally_pct = (highs[p_rim] - lows[t_before_rim]) / lows[t_before_rim]
+                        if pre_rally_pct < 0.04:  # Must have rallied >=4% into p_rim
+                            continue  # Rejects Cup starting from "Mid of Fall"
                     
                     handle_troughs = [t for t in troughs if t > t_cup]
                     is_double_handle = len(handle_troughs) >= 2
@@ -337,6 +345,12 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                         cup_depth_pct = (cup_depth / neckline) * 100
 
                         if 6.0 <= cup_depth_pct <= 30.0:
+                            # SOURCE RULE 2: Handle Bottom Breakdown Invalidation
+                            if handle_troughs:
+                                min_handle_bottom = min([float(lows[ht]) for ht in handle_troughs])
+                                if cmp_val < min_handle_bottom:
+                                    continue  # Pattern invalid if price closes below handle bottom
+
                             target = round(neckline + cup_depth, 2)
                             dist_pct = round(((cmp_val - neckline) / neckline) * 100, 1)
 
@@ -350,7 +364,7 @@ def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
                                     break
 
                             if breakout_idx is not None and breakout_idx < (n_recent - 2):
-                                continue  
+                                continue  # Past breakout -> Skip
 
                             pattern_label = 'Fresh Complex Cup with Handle (Double Handle)' if is_double_handle else 'Fresh Cup with Handle'
                             cup_start = dates[p_rim]
@@ -533,7 +547,7 @@ def create_geometric_workbook(ticker_list, output_filename="v40_geometric_analys
 
             current_row += 1
 
-    col_widths = [5-11]
+    col_widths = 
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
