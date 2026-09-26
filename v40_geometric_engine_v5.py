@@ -32,7 +32,7 @@ def safe_1d(df, col_name):
     
     return np.asarray(sub, dtype=float).ravel()
 
-def analyze_geometric_patterns(ticker, lookback_days=120, max_breakout_pct=4.0):
+def analyze_geometric_patterns(ticker, lookback_days=730, max_breakout_pct=4.0):
     ticker = ticker.strip().upper()
     
     default_no_pattern = {
